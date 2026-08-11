@@ -2,7 +2,7 @@
 FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
 
 # Set label for the docker image description
-LABEL description="Docker image for xtts-api-server"
+LABEL description="Docker image for xtts-api-server (VozDub fork - built from local source, not PyPI, so our /ping and /upload_reference additions are included)"
 
 # Install required packages (avoid cache to reduce image size)
 RUN apt-get update && \
@@ -14,17 +14,22 @@ RUN apt-get update && \
 # Upgrade pip and install virtualenv
 RUN python3 -m pip install --upgrade pip setuptools wheel ninja virtualenv
 
-# Copy the application source code to /app directory and change the workdir to /app
-# COPY . /app
-# WORKDIR /app
+# Copy the application source code (the VozDub fork, with the added routes)
+# and install it as a local package instead of pulling xtts-api-server from
+# PyPI - otherwise our /ping + /upload_reference additions would never
+# actually ship in the image.
+COPY . /app
+WORKDIR /app
 
 # Install Python dependencies
 RUN pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
 RUN pip install deepspeed
-RUN pip install xtts-api-server
+RUN pip install .
 
-# Expose the container ports
+# Expose the container port (RunPod Load Balancer PORT/PORT_HEALTH env vars
+# must be set to match this in the endpoint configuration).
 EXPOSE 8020
 
-# Run xtts_api_server when the container starts
-CMD ["bash", "-c", "python3 -m xtts_api_server --listen -p 8020 -t 'http://localhost:8020' -sf 'xtts-server/speakers' -o 'xtts-server/output' -mf 'xtts-server/models' --deepspeed"]
+# PORT is injected by RunPod ; default 8020 matches this server's own default
+# for local/manual runs. --listen binds 0.0.0.0 (required for RunPod).
+CMD ["bash", "-c", "python3 -m xtts_api_server --listen -p ${PORT:-8020} -t \"http://localhost:${PORT:-8020}\" -sf 'xtts-server/speakers' -o 'xtts-server/output' -mf 'xtts-server/models' --deepspeed"]

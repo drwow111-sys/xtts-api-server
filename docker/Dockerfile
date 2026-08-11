@@ -25,14 +25,19 @@ WORKDIR /app
 # PINNED versions from requirements.txt (coqui-tts==0.24.1, transformers==
 # 4.36.2, etc.) - these pins matter: `pip install .` alone resolves against
 # pyproject.toml's looser ranges, which pulled a newer coqui-tts/coqpit
-# combo that crashes on startup (TypeError: issubclass() arg 1 must be a
-# class, inside coqpit's config deserializer - a known break in newer
-# coqpit against this TTS version). Finally install our local package
-# WITHOUT letting it re-resolve/upgrade the deps we just pinned.
+# combo that crashes on startup. Finally install our local package WITHOUT
+# letting it re-resolve/upgrade the deps we just pinned.
 RUN pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
 RUN pip install deepspeed
 RUN pip install -r requirements.txt
 RUN pip install --no-deps .
+
+# Even with pinned versions, the installed coqpit still crashes on this
+# Python version with "TypeError: issubclass() arg 1 must be a class" while
+# loading the XTTS model config (known bug, see
+# daswer123/xtts-api-server#94 - no fixed coqpit release exists yet). Patch
+# the installed package directly rather than waiting on upstream.
+RUN python3 docker/patch_coqpit.py
 
 # Expose the container port (RunPod Load Balancer PORT/PORT_HEALTH env vars
 # must be set to match this in the endpoint configuration).

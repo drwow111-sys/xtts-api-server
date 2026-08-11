@@ -1,7 +1,7 @@
 from TTS.api import TTS
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Query
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Query, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse,StreamingResponse
+from fastapi.responses import FileResponse,StreamingResponse,JSONResponse
 
 from pydantic import BaseModel
 import uvicorn
@@ -140,6 +140,29 @@ class SynthesisFileRequest(BaseModel):
     speaker_wav: str 
     language: str
     file_name_or_path: str  
+
+# --- Ajouts VozDub (fork) ---------------------------------------------------
+# Ce serveur upstream ne fournit aucune route de sante ni d'upload HTTP pour
+# les voix de reference (il s'attend a des fichiers deja presents dans
+# SPEAKER_FOLDER). VozDub extrait une voix de reference DIFFERENTE a chaque
+# doublage (issue de la video de l'utilisateur), donc il faut pouvoir
+# l'uploader dynamiquement par requete HTTP - d'ou ces deux routes ajoutees :
+# /ping (health check RunPod Load Balancer) et /upload_reference (upload
+# multipart, memes noms de champs que Chatterbox-TTS-Server pour rester
+# compatible avec le client existant cote backend).
+@app.get("/ping")
+def ping():
+    return {"status": "ok"}
+
+@app.post("/upload_reference")
+async def upload_reference(files: UploadFile = File(...)):
+    speaker_dir = Path(XTTS.speaker_folder)
+    speaker_dir.mkdir(parents=True, exist_ok=True)
+    dest = speaker_dir / files.filename
+    with open(dest, "wb") as f:
+        shutil.copyfileobj(files.file, f)
+    return JSONResponse({"message": "Processed 1 file(s).", "uploaded_files": [files.filename]})
+# --- Fin ajouts VozDub -------------------------------------------------------
 
 @app.get("/speakers_list")
 def get_speakers():

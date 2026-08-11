@@ -32,9 +32,7 @@ WORKDIR /app
 # Python version with "TypeError: issubclass() arg 1 must be a class" while
 # loading the XTTS model config (known bug, see
 # daswer123/xtts-api-server#94 - no fixed coqpit release exists yet). Fixed
-# via a runtime monkey-patch in server.py itself (more robust than patching
-# the installed file's source text, which varies too much across versions
-# to match reliably) - see the "VozDub fix" block at the top of server.py.
+# via a runtime monkey-patch in server.py itself.
 RUN pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
 RUN pip install deepspeed
 RUN pip install -r requirements.txt
@@ -46,4 +44,10 @@ EXPOSE 8020
 
 # PORT is injected by RunPod ; default 8020 matches this server's own default
 # for local/manual runs. --listen binds 0.0.0.0 (required for RunPod).
-CMD ["bash", "-c", "python3 -m xtts_api_server --listen -p ${PORT:-8020} -t \"http://localhost:${PORT:-8020}\" -sf 'xtts-server/speakers' -o 'xtts-server/output' -mf 'xtts-server/models' --deepspeed"]
+#
+# --deepspeed intentionally dropped: it JIT-compiles custom CUDA kernels from
+# source on first request/first boot, which reliably takes 5-15+ minutes and
+# was causing cold starts to time out before the server ever finished coming
+# up. The synthesis speed win isn't worth that startup fragility for our use
+# case - plain inference is plenty fast already.
+CMD ["bash", "-c", "python3 -m xtts_api_server --listen -p ${PORT:-8020} -t \"http://localhost:${PORT:-8020}\" -sf 'xtts-server/speakers' -o 'xtts-server/output' -mf 'xtts-server/models'"]

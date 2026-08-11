@@ -1,3 +1,26 @@
+# --- VozDub fix (must run before any TTS/coqpit import below) ---------------
+# Known bug on this Python/coqpit combo: coqpit's config deserializer crashes
+# with "TypeError: issubclass() arg 1 must be a class" while loading the XTTS
+# model config (see daswer123/xtts-api-server#94 - no fixed coqpit release
+# exists yet). A text-based patch of the installed coqpit.py proved too
+# fragile (exact source varies by version/formatting), so we monkey-patch the
+# function at runtime instead: wrap it so a TypeError falls back to returning
+# the value unchanged instead of crashing the whole server on boot.
+import coqpit.coqpit as _vozdub_coqpit_module
+
+_vozdub_original_deserialize = _vozdub_coqpit_module._deserialize
+
+
+def _vozdub_patched_deserialize(x, field_type):
+    try:
+        return _vozdub_original_deserialize(x, field_type)
+    except TypeError:
+        return x
+
+
+_vozdub_coqpit_module._deserialize = _vozdub_patched_deserialize
+# --- end VozDub fix ----------------------------------------------------------
+
 from TTS.api import TTS
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Query, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware

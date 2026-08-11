@@ -8,7 +8,7 @@ LABEL description="Docker image for xtts-api-server (VozDub fork - built from lo
 RUN apt-get update && \
     apt-get install --no-install-recommends -y \
     python3-dev portaudio19-dev libportaudio2 libasound2-dev libportaudiocpp0 \
-    git python3 python3-pip make g++ ffmpeg && \
+    git python3 python3-pip make g++ ffmpeg curl && \
     rm -rf /var/lib/apt/lists/*
 
 # Upgrade pip and install virtualenv
@@ -38,6 +38,21 @@ RUN pip install deepspeed
 RUN pip install -r requirements.txt
 RUN pip install --no-deps .
 
+# Pre-download the XTTS v2 model weights INTO THE IMAGE at build time,
+# instead of letting the server download them on first request. RunPod's
+# serverless workers were getting killed and replaced (health-check timeout)
+# before the ~2GB runtime download + model init ever finished, creating an
+# infinite cold-start loop where no worker ever became ready. Baking the
+# weights into the image means a fresh worker only has to load local files,
+# which takes seconds. Path/filenames must match modeldownloader.py exactly
+# (xtts-server/models/<version>/...) and the version must match the
+# server's default (-v flag, v2.0.2 unless overridden in the CMD below).
+RUN mkdir -p xtts-server/models/v2.0.2 && \
+    curl -L --fail -o xtts-server/models/v2.0.2/config.json "https://huggingface.co/coqui/XTTS-v2/raw/v2.0.2/config.json" && \
+    curl -L --fail -o xtts-server/models/v2.0.2/vocab.json "https://huggingface.co/coqui/XTTS-v2/raw/v2.0.2/vocab.json" && \
+    curl -L --fail -o xtts-server/models/v2.0.2/model.pth "https://huggingface.co/coqui/XTTS-v2/resolve/v2.0.2/model.pth?download=true" && \
+    curl -L --fail -o xtts-server/models/v2.0.2/speakers_xtts.pth "https://huggingface.co/coqui/XTTS-v2/resolve/main/speakers_xtts.pth?download=true"
+
 # Expose the container port (RunPod Load Balancer PORT/PORT_HEALTH env vars
 # must be set to match this in the endpoint configuration).
 EXPOSE 8020
@@ -48,6 +63,5 @@ EXPOSE 8020
 # --deepspeed intentionally dropped: it JIT-compiles custom CUDA kernels from
 # source on first request/first boot, which reliably takes 5-15+ minutes and
 # was causing cold starts to time out before the server ever finished coming
-# up. The synthesis speed win isn't worth that startup fragility for our use
-# case - plain inference is plenty fast already.
+# up. The synthesis speed win isn't worth that startup fragility here.
 CMD ["bash", "-c", "python3 -m xtts_api_server --listen -p ${PORT:-8020} -t \"http://localhost:${PORT:-8020}\" -sf 'xtts-server/speakers' -o 'xtts-server/output' -mf 'xtts-server/models'"]

@@ -64,4 +64,17 @@ EXPOSE 8020
 # source on first request/first boot, which reliably takes 5-15+ minutes and
 # was causing cold starts to time out before the server ever finished coming
 # up. The synthesis speed win isn't worth that startup fragility here.
-CMD ["bash", "-c", "python3 -m xtts_api_server --listen -p ${PORT:-8020} -t \"http://localhost:${PORT:-8020}\" -sf 'xtts-server/speakers' -o 'xtts-server/output' -mf 'xtts-server/models'"]
+#
+# -sf points at /runpod-volume/speakers (a RunPod Network Volume mounted on
+# every worker) instead of a path inside the container. Load Balancer
+# endpoints scale to several workers behind the same URL, each with its own
+# local disk: a reference voice uploaded via /upload_reference landed on
+# whichever worker happened to handle that request, so a later
+# /tts_to_audio/ call routed to a DIFFERENT worker got "Failed to open the
+# input" (file not found) and fell back to silence in the client's dubbed
+# output. Putting the speaker folder on the shared volume makes uploaded
+# references visible to every worker regardless of which one handles which
+# request. -o (per-request output, consumed immediately by the caller) and
+# -mf (model weights, already baked into every worker's image above) stay
+# local - only the speaker folder needs cross-worker consistency.
+CMD ["bash", "-c", "mkdir -p /runpod-volume/speakers && python3 -m xtts_api_server --listen -p ${PORT:-8020} -t \"http://localhost:${PORT:-8020}\" -sf '/runpod-volume/speakers' -o 'xtts-server/output' -mf 'xtts-server/models'"]

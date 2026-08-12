@@ -22,7 +22,7 @@ _vozdub_coqpit_module._deserialize = _vozdub_patched_deserialize
 # --- end VozDub fix ----------------------------------------------------------
 
 from TTS.api import TTS
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Query, File, UploadFile
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Query, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse,StreamingResponse,JSONResponse
 
@@ -31,6 +31,7 @@ import uvicorn
 
 import os
 import time
+import tempfile
 from pathlib import Path
 import shutil
 from loguru import logger
@@ -185,6 +186,57 @@ async def upload_reference(files: UploadFile = File(...)):
     with open(dest, "wb") as f:
         shutil.copyfileobj(files.file, f)
     return JSONResponse({"message": "Processed 1 file(s).", "uploaded_files": [files.filename]})
+
+# /tts_to_audio_with_reference/ - la VRAIE correction du bug de voix de
+# reference invisible entre workers (voir commentaire sur -sf dans le
+# Dockerfile). Plutot que de compter sur un stockage partage entre workers
+# (qui force un Network Volume mono-datacenter et peut assecher la capacite
+# GPU disponible), chaque appel de synthese transporte SON PROPRE fichier de
+# reference dans la meme requete HTTP que le texte : peu importe quel worker
+# du Load Balancer la recoit, il a tout ce qu'il lui faut, sans dependre du
+# disque local d'un AUTRE worker. Le fichier de reference est ecrit dans un
+# repertoire temporaire propre a la requete (tempfile, jamais le
+# speaker_folder partage) et supprime juste apres usage.
+@app.post("/tts_to_audio_with_reference/")
+async def tts_to_audio_with_reference(
+    background_tasks: BackgroundTasks,
+    text: str = Form(...),
+    language: str = Form(...),
+    reference_audio: UploadFile = File(...),
+):
+    try:
+        if language.lower() not in supported_languages:
+            raise HTTPException(status_code=400,
+                                detail="Language code sent is either unsupported or misspelled.")
+
+        tmp_dir = Path(tempfile.gettempdir())
+        reference_path = tmp_dir / f"ref-{uuid4()}.wav"
+        with open(reference_path, "wb") as f:
+            shutil.copyfileobj(reference_audio.file, f)
+
+        try:
+            output_file_path = XTTS.process_tts_to_file(
+                text=text,
+                speaker_name_or_path=str(reference_path),
+                language=language.lower(),
+                file_name_or_path=f'{str(uuid4())}.wav'
+            )
+        finally:
+            background_tasks.add_task(os.unlink, reference_path)
+
+        if not XTTS.enable_cache_results:
+            background_tasks.add_task(os.unlink, output_file_path)
+
+        return FileResponse(
+            path=output_file_path,
+            media_type='audio/wav',
+            filename="output.wav",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(e)
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 # --- Fin ajouts VozDub -------------------------------------------------------
 
 @app.get("/speakers_list")
